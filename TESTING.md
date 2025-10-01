@@ -4,7 +4,7 @@
 
 1. Install the package globally:
    ```bash
-   pnpm install -g .
+   npm install -g .
    ```
 2. Run the command help to verify the new command:
    ```bash
@@ -31,7 +31,7 @@
    wt new editor
    ```
 2. Verify that a new sibling directory named `<currentDirectoryName>-editor` is created.
-3. Confirm that the worktree is added to the Git repository and that the Cursor editor opens the new directory.
+3. Confirm that the worktree is added to the Git repository and that the configured editor opens the new directory.
 
 ## Remove Worktree Force Flag Test
 

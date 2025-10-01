@@ -2,20 +2,20 @@ import { execa } from "execa";
 import chalk from "chalk";
 import { stat } from "node:fs/promises";
 import { resolve, join, dirname, basename } from "node:path";
-import { getDefaultEditor } from "../config.js";
-import { isWorktreeClean } from "../utils/git.js";
+import { getDefaultEditor, getExtraCopyPaths } from "../config.js";
+import { isWorktreeClean, isMainRepoBare } from "../utils/git.js";
+import { copyEnvFilesAndExtras, installDependencies } from "../utils/worktree.js";
 export async function newWorktreeHandler(branchName = "main", options) {
     try {
-        // 1. Validate we're in a git repo
+        // 1. Validate we're in a git repo and resolve the repository root
         await execa("git", ["rev-parse", "--is-inside-work-tree"]);
+        const { stdout: repoRootStdout } = await execa("git", ["rev-parse", "--show-toplevel"]);
+        const repoRoot = repoRootStdout.trim();
         console.log(chalk.blue("Checking if main worktree is clean..."));
         const isClean = await isWorktreeClean(".");
         if (!isClean) {
-            console.warn(chalk.yellow("⚠️ Warning: Your main worktree is not clean."));
-            console.warn(chalk.yellow("While 'wt new' might succeed, it's generally recommended to have a clean state."));
-            console.warn(chalk.cyan("Run 'git status' to review changes. Consider committing or stashing."));
-            // Decide whether to exit or just warn. Warning might be sufficient here.
-            // process.exit(1);
+            console.log(chalk.red("⚠️  Warning: Your main worktree has uncommitted changes."));
+            console.log(chalk.yellow("Continuing anyway. Consider committing, stashing, or discarding changes before creating worktrees."));
         }
         else {
             console.log(chalk.green("✅ Main worktree is clean."));
@@ -71,6 +71,12 @@ export async function newWorktreeHandler(branchName = "main", options) {
         }
         else {
             console.log(chalk.blue(`Creating new worktree for branch "${branchName}" at: ${resolvedPath}`));
+            if (await isMainRepoBare()) {
+                console.error(chalk.red("❌ Error: The main repository is configured as 'bare' (core.bare=true)."));
+                console.error(chalk.red("   This prevents normal Git operations. Please fix the configuration:"));
+                console.error(chalk.cyan("   git config core.bare false"));
+                process.exit(1);
+            }
             if (!branchExists) {
                 console.log(chalk.yellow(`Branch "${branchName}" doesn't exist. Creating new branch with worktree...`));
                 // Create a new branch and worktree in one command with -b flag
@@ -81,11 +87,11 @@ export async function newWorktreeHandler(branchName = "main", options) {
                 await execa("git", ["worktree", "add", resolvedPath, branchName]);
             }
             // 5. (Optional) Install dependencies if --install flag is provided
-            if (options.install) {
-                console.log(chalk.blue(`Installing dependencies using ${options.install} in ${resolvedPath}...`));
-                await execa(options.install, ["install"], { cwd: resolvedPath, stdio: "inherit" });
-            }
         }
+        console.log(chalk.blue("Copying environment files and configured extras..."));
+        const extraPaths = getExtraCopyPaths();
+        await copyEnvFilesAndExtras(repoRoot, resolvedPath, extraPaths);
+        await installDependencies(resolvedPath, options.install);
         // 6. Open in the specified editor (or use configured default)
         const configuredEditor = getDefaultEditor();
         const editorCommand = options.editor || configuredEditor; // Use option, then config, fallback is handled by config default
@@ -100,8 +106,6 @@ export async function newWorktreeHandler(branchName = "main", options) {
             console.warn(chalk.yellow(`Continuing without opening editor.`));
         }
         console.log(chalk.green(`Worktree ${directoryExists ? "opened" : "created"} at ${resolvedPath}.`));
-        if (!directoryExists && options.install)
-            console.log(chalk.green(`Dependencies installed using ${options.install}.`));
         console.log(chalk.green(`Attempted to open in ${editorCommand}.`));
     }
     catch (error) {

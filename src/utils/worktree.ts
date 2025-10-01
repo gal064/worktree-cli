@@ -1,0 +1,527 @@
+import { execa } from 'execa';
+import chalk from 'chalk';
+import { readdir, mkdir, copyFile, cp, stat, lstat, rm } from 'node:fs/promises';
+import { Dirent } from 'node:fs';
+import { join, dirname, relative, resolve, isAbsolute, sep } from 'node:path';
+
+const SKIP_DIR_NAMES = new Set(['node_modules', '.venv', '.git']);
+
+function shouldSkipDirectory(dirent: Dirent): boolean {
+    if (!dirent.isDirectory() && !dirent.isSymbolicLink()) {
+        return false;
+    }
+
+    const name = dirent.name;
+    if (SKIP_DIR_NAMES.has(name)) {
+        return true;
+    }
+    return name.startsWith('.env');
+}
+
+async function pathExists(targetPath: string): Promise<boolean> {
+    try {
+        await stat(targetPath);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+interface CopySummary {
+    envCopied: number;
+    envSkipped: number;
+    extraCopied: string[];
+    extraSkipped: string[];
+    extraMissing: string[];
+}
+
+export async function copyEnvFilesAndExtras(
+    sourceRoot: string,
+    destinationRoot: string,
+    extraPaths: string[]
+): Promise<CopySummary> {
+    const summary: CopySummary = {
+        envCopied: 0,
+        envSkipped: 0,
+        extraCopied: [],
+        extraSkipped: [],
+        extraMissing: [],
+    };
+
+    const stack: string[] = [sourceRoot];
+
+    while (stack.length) {
+        const currentDir = stack.pop();
+        if (!currentDir) continue;
+
+        let entries: Dirent[] = [];
+        try {
+            entries = await readdir(currentDir, { withFileTypes: true });
+        } catch (error) {
+            console.warn(chalk.yellow(`Skipping unreadable directory: ${currentDir}`), error);
+            continue;
+        }
+
+        for (const entry of entries) {
+            const entryPath = join(currentDir, entry.name);
+
+            if (entry.isDirectory()) {
+                if (shouldSkipDirectory(entry)) {
+                    continue;
+                }
+                stack.push(entryPath);
+                continue;
+            }
+
+            if (!entry.isFile()) {
+                continue;
+            }
+
+            if (entry.name.startsWith('.env')) {
+                const relativePath = relative(sourceRoot, entryPath);
+                const destinationPath = join(destinationRoot, relativePath);
+
+                try {
+                    await mkdir(dirname(destinationPath), { recursive: true });
+                    if (await pathExists(destinationPath)) {
+                        summary.envSkipped += 1;
+                        continue;
+                    }
+
+                    await copyFile(entryPath, destinationPath);
+                    summary.envCopied += 1;
+                } catch (error) {
+                    console.warn(
+                        chalk.yellow(`Failed to copy ${relativePath} into new worktree.`),
+                        error
+                    );
+                }
+            }
+        }
+    }
+
+    const uniqueExtraPaths = Array.from(new Set(extraPaths.map((extraPath) => extraPath.trim()))).filter(
+        (extraPath) => extraPath.length > 0
+    );
+
+    for (const configuredPath of uniqueExtraPaths) {
+        const absoluteSource = isAbsolute(configuredPath)
+            ? configuredPath
+            : resolve(sourceRoot, configuredPath);
+
+        const relativeToRoot = relative(sourceRoot, absoluteSource);
+        if (relativeToRoot.startsWith('..') || isAbsolute(relativeToRoot)) {
+            console.warn(
+                chalk.yellow(
+                    `Skipping extra copy path "${configuredPath}" because it is outside the repository root.`
+                )
+            );
+            continue;
+        }
+
+        const segments = relativeToRoot.split(sep).filter((segment) => segment.length > 0);
+        const includesSkippedSegment = segments.some(
+            (segment) => SKIP_DIR_NAMES.has(segment) || segment.startsWith('.env')
+        );
+
+        if (includesSkippedSegment) {
+            console.warn(
+                chalk.yellow(
+                    `Skipping extra copy path "${configuredPath}" because it contains a restricted directory (node_modules/.venv/.env*).`
+                )
+            );
+            continue;
+        }
+
+        if (!(await pathExists(absoluteSource))) {
+            console.warn(chalk.yellow(`Configured copy path missing: ${configuredPath}`));
+            summary.extraMissing.push(configuredPath);
+            continue;
+        }
+
+        const destinationPath = join(destinationRoot, relativeToRoot);
+        try {
+            const sourceStat = await stat(absoluteSource);
+            await mkdir(sourceStat.isDirectory() ? destinationPath : dirname(destinationPath), {
+                recursive: true,
+            });
+
+            await cp(absoluteSource, destinationPath, {
+                recursive: true,
+                force: false,
+                errorOnExist: false,
+                verbatimSymlinks: false,
+            });
+            summary.extraCopied.push(configuredPath);
+        } catch (error: any) {
+            if (error?.code === 'EEXIST') {
+                summary.extraSkipped.push(configuredPath);
+                continue;
+            }
+            console.warn(chalk.yellow(`Failed to copy configured path "${configuredPath}".`), error);
+        }
+    }
+
+    if (summary.envCopied > 0) {
+        console.log(chalk.green(`Copied ${summary.envCopied} environment file(s).`));
+    }
+    if (summary.envSkipped > 0) {
+        console.log(
+            chalk.yellow(
+                `Skipped ${summary.envSkipped} environment file(s) that already existed in the destination.`
+            )
+        );
+    }
+
+    if (summary.extraCopied.length) {
+        console.log(
+            chalk.green(
+                `Copied extra paths: ${summary.extraCopied.join(', ')}`
+            )
+        );
+    }
+    if (summary.extraSkipped.length) {
+        console.log(
+            chalk.yellow(
+                `Skipped existing extra paths: ${summary.extraSkipped.join(', ')}`
+            )
+        );
+    }
+    if (summary.extraMissing.length) {
+        console.log(
+            chalk.yellow(
+                `Missing configured paths: ${summary.extraMissing.join(', ')}`
+            )
+        );
+    }
+
+    return summary;
+}
+
+type AutoDetectedManager = 'npm' | 'yarn' | 'uv';
+
+interface LockFileInfo {
+    manager: AutoDetectedManager;
+    directory: string;
+    lockFile: string;
+}
+
+const LOCKFILE_MANAGER_MAP: Record<string, AutoDetectedManager> = {
+    'package-lock.json': 'npm',
+    'yarn.lock': 'yarn',
+    'uv.lock': 'uv',
+};
+
+async function runInstallCommand(manager: string, cwd: string): Promise<void> {
+    const normalized = manager.toLowerCase();
+    let command = normalized;
+    let args: string[] = [];
+
+    switch (normalized) {
+        case 'npm':
+            args = ['install'];
+            break;
+        case 'yarn':
+            args = ['install'];
+            break;
+        case 'pnpm':
+            args = ['install'];
+            break;
+        case 'bun':
+            args = ['install'];
+            break;
+        case 'uv':
+            command = 'uv';
+            args = ['sync'];
+            break;
+        default:
+            command = normalized;
+            args = ['install'];
+            break;
+    }
+
+    console.log(chalk.blue(`Running ${command} ${args.join(' ')} in ${cwd}`));
+    await execa(command, args, { cwd, stdio: 'inherit' });
+}
+
+async function discoverLockFiles(root: string): Promise<LockFileInfo[]> {
+    const results: LockFileInfo[] = [];
+    const queue: string[] = [root];
+
+    while (queue.length) {
+        const currentDir = queue.pop();
+        if (!currentDir) continue;
+
+        let entries: Dirent[] = [];
+        try {
+            entries = await readdir(currentDir, { withFileTypes: true });
+        } catch (error) {
+            console.warn(chalk.yellow(`Skipping unreadable directory during lockfile discovery: ${currentDir}`), error);
+            continue;
+        }
+
+        for (const entry of entries) {
+            const entryPath = join(currentDir, entry.name);
+
+            if (entry.isDirectory()) {
+                if (shouldSkipDirectory(entry)) {
+                    continue;
+                }
+                queue.push(entryPath);
+                continue;
+            }
+
+            if (!entry.isFile()) {
+                continue;
+            }
+
+            const manager = LOCKFILE_MANAGER_MAP[entry.name];
+            if (!manager) {
+                continue;
+            }
+
+            results.push({
+                manager,
+                directory: currentDir,
+                lockFile: entryPath,
+            });
+        }
+    }
+
+    return results;
+}
+
+interface InstallSummary {
+    executed: LockFileInfo[];
+    manual?: { manager: string; directory: string };
+}
+
+export async function installDependencies(
+    worktreePath: string,
+    installOption?: string
+): Promise<InstallSummary> {
+    // Handle skip
+    if (installOption === 'skip') {
+        console.log(chalk.blue('Skipping dependency installation.'));
+        return { executed: [] };
+    }
+
+    // Handle manual manager (not 'auto' or 'skip')
+    if (installOption && installOption !== 'auto') {
+        const summary: InstallSummary = {
+            executed: [],
+            manual: { manager: installOption, directory: worktreePath },
+        };
+        await runInstallCommand(installOption.toLowerCase(), worktreePath);
+        return summary;
+    }
+
+    // Auto-detect (installOption is undefined or 'auto')
+    console.log(chalk.blue('Auto-detecting lock files for dependency installation...'));
+    const lockFiles = await discoverLockFiles(worktreePath);
+
+    if (!lockFiles.length) {
+        console.log(chalk.blue('No lock files detected for auto-install.'));
+        return { executed: [] };
+    }
+
+    const summary: InstallSummary = {
+        executed: [],
+    };
+
+    for (const info of lockFiles) {
+        const relativeDir = relative(worktreePath, info.directory) || '.';
+        console.log(
+            chalk.blue(
+                `Detected ${info.lockFile} (manager: ${info.manager}) in ${relativeDir}.`)
+        );
+        await runInstallCommand(info.manager, info.directory);
+        summary.executed.push(info);
+    }
+
+    return summary;
+}
+
+interface ReplicationSummary {
+    copied: string[];
+    removed: string[];
+    missing: string[];
+}
+
+function parseNullSeparated(stdout: string): string[] {
+    if (!stdout) return [];
+    return stdout
+        .split('\0')
+        .filter((entry) => entry.length > 0);
+}
+
+export async function replicateWorkingTreeState(
+    sourceRoot: string,
+    destinationRoot: string
+): Promise<ReplicationSummary> {
+    console.log(chalk.blue('Replicating current working tree state into the new worktree...'));
+
+    const summary: ReplicationSummary = {
+        copied: [],
+        removed: [],
+        missing: [],
+    };
+
+    const filesToCopy = new Set<string>();
+    const deletions = new Set<string>();
+
+    let diffNamesStdout = '';
+    try {
+        const diffNamesResult = await execa('git', ['diff', '--name-only', 'HEAD', '-z'], {
+            cwd: sourceRoot,
+        });
+        diffNamesStdout = diffNamesResult.stdout;
+    } catch (error: any) {
+        if (error.exitCode !== 128) {
+            throw error;
+        }
+        // exitCode 128 typically means no commits yet; ignore.
+    }
+
+    parseNullSeparated(diffNamesStdout).forEach((path) => filesToCopy.add(path));
+
+    let untrackedStdout = '';
+    try {
+        const untrackedResult = await execa('git', ['ls-files', '--others', '--exclude-standard', '-z'], {
+            cwd: sourceRoot,
+        });
+        untrackedStdout = untrackedResult.stdout;
+    } catch (error) {
+        console.warn(chalk.yellow('Failed to detect untracked files for replication.'), error);
+    }
+
+    parseNullSeparated(untrackedStdout).forEach((path) => filesToCopy.add(path));
+
+    let statusStdout = '';
+    try {
+        const statusResult = await execa('git', ['diff', '--name-status', 'HEAD', '-z'], {
+            cwd: sourceRoot,
+        });
+        statusStdout = statusResult.stdout;
+    } catch (error: any) {
+        if (error.exitCode !== 128) {
+            throw error;
+        }
+    }
+
+    const statusEntries = parseNullSeparated(statusStdout);
+    for (const entry of statusEntries) {
+        const parts = entry.split('\t');
+        if (parts.length === 0) continue;
+
+        const status = parts[0];
+        const code = status[0];
+
+        if (code === 'D' && parts[1]) {
+            deletions.add(parts[1]);
+            continue;
+        }
+
+        if (code === 'R' && parts.length >= 3) {
+            const [, fromPath, toPath] = parts;
+            if (fromPath) {
+                deletions.add(fromPath);
+            }
+            if (toPath) {
+                filesToCopy.add(toPath);
+            }
+            continue;
+        }
+
+        if (parts[1]) {
+            filesToCopy.add(parts[1]);
+        }
+    }
+
+    deletions.forEach((path) => filesToCopy.delete(path));
+
+    for (const relativePath of filesToCopy) {
+        const sourcePath = join(sourceRoot, relativePath);
+        const destinationPath = join(destinationRoot, relativePath);
+
+        if (!(await pathExists(sourcePath))) {
+            summary.missing.push(relativePath);
+            continue;
+        }
+
+        try {
+            await mkdir(dirname(destinationPath), { recursive: true });
+            const stats = await lstat(sourcePath);
+            await cp(sourcePath, destinationPath, {
+                recursive: stats.isDirectory(),
+                force: true,
+                errorOnExist: false,
+                dereference: false,
+            });
+            summary.copied.push(relativePath);
+        } catch (error) {
+            console.warn(chalk.yellow(`Failed to copy ${relativePath} to the new worktree.`), error);
+        }
+    }
+
+    for (const relativePath of deletions) {
+        const destinationPath = join(destinationRoot, relativePath);
+        try {
+            await rm(destinationPath, { recursive: true, force: true });
+            summary.removed.push(relativePath);
+        } catch (error) {
+            console.warn(chalk.yellow(`Failed to remove ${relativePath} in the new worktree.`), error);
+        }
+    }
+
+    if (summary.copied.length) {
+        console.log(chalk.green(`Copied ${summary.copied.length} file(s) from the source worktree.`));
+    }
+    if (summary.removed.length) {
+        console.log(chalk.green(`Removed ${summary.removed.length} file(s) to mirror deletions.`));
+    }
+    if (summary.missing.length) {
+        console.log(
+            chalk.yellow(
+                `Skipped ${summary.missing.length} file(s) because they were not present in the source worktree.`
+            )
+        );
+    }
+
+    if (!summary.copied.length && !summary.removed.length) {
+        console.log(chalk.blue('No changes to replicate; worktree matches HEAD.'));
+    }
+
+    return summary;
+}
+
+function resolveGitDir(basePath: string, gitDirValue: string): string {
+    const trimmed = gitDirValue.trim();
+    return isAbsolute(trimmed) ? trimmed : resolve(basePath, trimmed);
+}
+
+export async function duplicateGitIndex(sourceRoot: string, destinationRoot: string): Promise<void> {
+    try {
+        const [sourceGitDirResult, destinationGitDirResult] = await Promise.all([
+            execa('git', ['rev-parse', '--git-dir'], { cwd: sourceRoot }),
+            execa('git', ['rev-parse', '--git-dir'], { cwd: destinationRoot }),
+        ]);
+
+        const sourceGitDir = resolveGitDir(sourceRoot, sourceGitDirResult.stdout);
+        const destinationGitDir = resolveGitDir(destinationRoot, destinationGitDirResult.stdout);
+
+        const sourceIndexPath = join(sourceGitDir, 'index');
+        const destinationIndexPath = join(destinationGitDir, 'index');
+
+        if (!(await pathExists(sourceIndexPath))) {
+            console.warn(chalk.yellow('Source git index not found; staged changes will not be copied.'));
+            return;
+        }
+
+        await mkdir(dirname(destinationIndexPath), { recursive: true });
+        await copyFile(sourceIndexPath, destinationIndexPath);
+        console.log(chalk.green('Synced staged changes into the new worktree.'));
+    } catch (error) {
+        console.warn(chalk.yellow('Failed to synchronize git index between worktrees.'), error);
+    }
+}

@@ -2,24 +2,29 @@ import { execa } from "execa";
 import chalk from "chalk";
 import { stat } from "node:fs/promises";
 import { resolve, join, dirname, basename } from "node:path";
-import { getDefaultEditor } from "../config.js";
+import { getDefaultEditor, getExtraCopyPaths } from "../config.js";
 import { isWorktreeClean, isMainRepoBare } from "../utils/git.js";
+import { copyEnvFilesAndExtras, installDependencies } from "../utils/worktree.js";
 
 export async function newWorktreeHandler(
     branchName: string = "main",
     options: { path?: string; checkout?: boolean; install?: string; editor?: string }
 ) {
     try {
-        // 1. Validate we're in a git repo
+        // 1. Validate we're in a git repo and resolve the repository root
         await execa("git", ["rev-parse", "--is-inside-work-tree"]);
+        const { stdout: repoRootStdout } = await execa("git", ["rev-parse", "--show-toplevel"]);
+        const repoRoot = repoRootStdout.trim();
 
         console.log(chalk.blue("Checking if main worktree is clean..."));
         const isClean = await isWorktreeClean(".");
         if (!isClean) {
-            console.error(chalk.red("❌ Error: Your main worktree is not clean."));
-            console.error(chalk.yellow("Creating a new worktree requires a clean main worktree state."));
-            console.error(chalk.cyan("Please commit, stash, or discard your changes. Run 'git status' to see the changes."));
-            process.exit(1); // Exit if not clean
+            console.log(chalk.red("⚠️  Warning: Your main worktree has uncommitted changes."));
+            console.log(
+                chalk.yellow(
+                    "Continuing anyway. Consider committing, stashing, or discarding changes before creating worktrees."
+                )
+            );
         } else {
             console.log(chalk.green("✅ Main worktree is clean."));
         }
@@ -95,11 +100,13 @@ export async function newWorktreeHandler(
             }
 
             // 5. (Optional) Install dependencies if --install flag is provided
-            if (options.install) {
-                console.log(chalk.blue(`Installing dependencies using ${options.install} in ${resolvedPath}...`));
-                await execa(options.install, ["install"], { cwd: resolvedPath, stdio: "inherit" });
-            }
         }
+
+        console.log(chalk.blue("Copying environment files and configured extras..."));
+        const extraPaths = getExtraCopyPaths();
+        await copyEnvFilesAndExtras(repoRoot, resolvedPath, extraPaths);
+
+        await installDependencies(resolvedPath, options.install);
 
         // 6. Open in the specified editor (or use configured default)
         const configuredEditor = getDefaultEditor();
@@ -115,7 +122,6 @@ export async function newWorktreeHandler(
         }
 
         console.log(chalk.green(`Worktree ${directoryExists ? "opened" : "created"} at ${resolvedPath}.`));
-        if (!directoryExists && options.install) console.log(chalk.green(`Dependencies installed using ${options.install}.`));
         console.log(chalk.green(`Attempted to open in ${editorCommand}.`));
 
     } catch (error) {

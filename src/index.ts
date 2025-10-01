@@ -3,6 +3,7 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import { newWorktreeHandler } from "./commands/new.js";
+import { copyWorktreeHandler } from "./commands/copy.js";
 import { listWorktreesHandler } from "./commands/list.js";
 import { removeWorktreeHandler } from "./commands/remove.js";
 import { mergeWorktreeHandler } from "./commands/merge.js";
@@ -11,6 +12,30 @@ import { configHandler } from "./commands/config.js";
 import { prWorktreeHandler } from "./commands/pr.js";
 import { openWorktreeHandler } from "./commands/open.js";
 import { extractWorktreeHandler } from "./commands/extract.js";
+import { getDefaultPackageManager } from "./config.js";
+
+/**
+ * Resolves the install option based on CLI flag and config.
+ * Priority: CLI flag > config
+ * - true (flag without value) -> 'auto'
+ * - string value -> use that value
+ * - undefined -> use config value
+ */
+function resolveInstallOption(cliValue: string | boolean | undefined): string | undefined {
+  if (cliValue !== undefined) {
+    // CLI flag was provided
+    if (typeof cliValue === 'boolean') {
+      // --install flag without value means auto-detect
+      return cliValue ? 'auto' : undefined;
+    }
+    // --install <value> was provided
+    return cliValue;
+  }
+
+  // Use config value
+  const configValue = getDefaultPackageManager();
+  return configValue === 'skip' ? 'skip' : configValue;
+}
 
 const program = new Command();
 
@@ -29,8 +54,8 @@ program
     false
   )
   .option(
-    "-i, --install <packageManager>",
-    "Package manager to use for installing dependencies (npm, pnpm, bun, etc.)"
+    "-i, --install [packageManager]",
+    "Package manager to use for installing dependencies (npm, pnpm, bun, uv, skip, auto, etc.). If no value provided, auto-detects."
   )
   .option(
     "-e, --editor <editor>",
@@ -39,7 +64,30 @@ program
   .description(
     "Create a new worktree for the specified branch, install dependencies if specified, and open in editor."
   )
-  .action(newWorktreeHandler);
+  .action((branchName, options) => {
+    const resolvedInstall = resolveInstallOption(options.install);
+    newWorktreeHandler(branchName, { ...options, install: resolvedInstall });
+  });
+
+program
+  .command("copy")
+  .argument("[branchName]", "Name of the branch to create or reuse for the copied worktree")
+  .option("-p, --path <path>", "Relative path/folder name for the new worktree")
+  .option(
+    "-i, --install [packageManager]",
+    "Package manager to use for installing dependencies (npm, pnpm, bun, uv, skip, auto, etc.). If no value provided, auto-detects."
+  )
+  .option(
+    "-e, --editor <editor>",
+    "Editor to use for opening the worktree (e.g., code, webstorm, windsurf, etc.)"
+  )
+  .description(
+    "Create a new worktree from the current HEAD and replicate the working directory state."
+  )
+  .action((branchName, options) => {
+    const resolvedInstall = resolveInstallOption(options.install);
+    copyWorktreeHandler(branchName, { ...options, install: resolvedInstall });
+  });
 
 program
   .command("list")
@@ -88,8 +136,8 @@ program
     "Specify a custom path for the worktree (defaults to repoName-branchName)"
   )
   .option(
-    "-i, --install <packageManager>",
-    "Package manager to use for installing dependencies (npm, pnpm, bun, etc.)"
+    "-i, --install [packageManager]",
+    "Package manager to use for installing dependencies (npm, pnpm, bun, uv, skip, auto, etc.). If no value provided, auto-detects."
   )
   .option(
     "-e, --editor <editor>",
@@ -98,7 +146,10 @@ program
   .description(
     "Fetch the branch for a given GitHub PR number and create a worktree."
   )
-  .action(prWorktreeHandler);
+  .action((prNumber, options) => {
+    const resolvedInstall = resolveInstallOption(options.install);
+    prWorktreeHandler(prNumber, { ...options, install: resolvedInstall });
+  });
 
 program
   .command("open")
@@ -115,8 +166,8 @@ program
   .argument("[branchName]", "Name of the branch to extract (defaults to current branch)")
   .option("-p, --path <path>", "Relative path/folder name for the worktree")
   .option(
-    "-i, --install <packageManager>",
-    "Package manager to use for installing dependencies (npm, pnpm, bun, etc.)"
+    "-i, --install [packageManager]",
+    "Package manager to use for installing dependencies (npm, pnpm, bun, uv, skip, auto, etc.). If no value provided, auto-detects."
   )
   .option(
     "-e, --editor <editor>",
@@ -125,21 +176,35 @@ program
   .description(
     "Extract an existing branch as a new worktree. If no branch is specified, extracts the current branch."
   )
-  .action(extractWorktreeHandler);
+  .action((branchName, options) => {
+    const resolvedInstall = resolveInstallOption(options.install);
+    extractWorktreeHandler(branchName, { ...options, install: resolvedInstall });
+  });
 
 program
   .command("config")
   .description("Manage CLI configuration settings.")
   .addCommand(
-    new Command("set").description("Set a configuration value.").addCommand(
-      new Command("editor")
-        .argument(
-          "<editorName>",
-          "Name of the editor command (e.g., code, cursor, webstorm)"
-        )
-        .description("Set the default editor to open worktrees in.")
-        .action((editorName) => configHandler("set", "editor", editorName))
-    )
+    new Command("set")
+      .description("Set a configuration value.")
+      .addCommand(
+        new Command("editor")
+          .argument(
+            "<editorName>",
+            "Name of the editor command (e.g., code, cursor, webstorm)"
+          )
+          .description("Set the default editor to open worktrees in.")
+          .action((editorName) => configHandler("set", "editor", editorName))
+      )
+      .addCommand(
+        new Command("package-manager")
+          .argument(
+            "<manager>",
+            "Package manager to use by default (npm, pnpm, bun, uv, skip, auto)"
+          )
+          .description("Set the default package manager for dependency installation.")
+          .action((manager) => configHandler("set", "package-manager", manager))
+      )
   )
   .addCommand(
     new Command("get")
@@ -149,11 +214,37 @@ program
           .description("Get the currently configured default editor.")
           .action(() => configHandler("get", "editor"))
       )
+      .addCommand(
+        new Command("package-manager")
+          .description("Get the currently configured default package manager.")
+          .action(() => configHandler("get", "package-manager"))
+      )
   )
   .addCommand(
     new Command("path")
       .description("Show the path to the configuration file.")
       .action(() => configHandler("path"))
+  )
+  .addCommand(
+    new Command("copy-paths")
+      .description("Manage extra paths copied into new worktrees.")
+      .addCommand(
+        new Command("list")
+          .description("List configured extra copy paths.")
+          .action(() => configHandler("copy-paths", "list"))
+      )
+      .addCommand(
+        new Command("add")
+          .argument("<path>", "Path or glob to copy into new worktrees.")
+          .description("Add a path to the extra copy list.")
+          .action((path) => configHandler("copy-paths", "add", path))
+      )
+      .addCommand(
+        new Command("remove")
+          .argument("<path>", "Path or glob to remove from the copy list.")
+          .description("Remove a path from the extra copy list.")
+          .action((path) => configHandler("copy-paths", "remove", path))
+      )
   );
 
 program.parse(process.argv);

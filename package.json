@@ -1,7 +1,7 @@
 {
 	"name": "@johnlindquist/worktree",
 	"version": "0.0.0-development",
-	"packageManager": "pnpm@9.5.0",
+	"packageManager": "npm@8.19.2",
 	"description": "A CLI tool for managing Git worktrees with a focus on opening them in the Cursor editor.",
 	"author": "Your Name",
 	"license": "MIT",
