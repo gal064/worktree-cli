@@ -1,5 +1,5 @@
 import chalk from 'chalk';
-import { getDefaultEditor, setDefaultEditor, getConfigPath, getExtraCopyPaths, addExtraCopyPath, removeExtraCopyPath, getDefaultPackageManager, setDefaultPackageManager, } from '../config.js';
+import { getDefaultEditor, setDefaultEditor, getConfigPath, getCopyPaths, setCopyPaths, getDefaultPackageManager, setDefaultPackageManager, } from '../config.js';
 export async function configHandler(action, key, value) {
     try {
         switch (action) {
@@ -11,6 +11,15 @@ export async function configHandler(action, key, value) {
                 else if (key === 'package-manager') {
                     const packageManager = getDefaultPackageManager();
                     console.log(chalk.blue(`Default package manager is currently set to: ${chalk.bold(packageManager)}`));
+                }
+                else if (key === 'copy-paths') {
+                    const copyPaths = getCopyPaths();
+                    if (!copyPaths) {
+                        console.log(chalk.blue('No copy-paths configured.'));
+                    }
+                    else {
+                        console.log(chalk.blue(`Copy-paths: ${chalk.bold(copyPaths)}`));
+                    }
                 }
                 else {
                     console.error(chalk.red(`Unknown configuration key to get: ${key}`));
@@ -34,6 +43,20 @@ export async function configHandler(action, key, value) {
                     console.error(chalk.red(`You must provide a package manager (npm, pnpm, bun, uv, skip, auto, etc.).`));
                     process.exit(1);
                 }
+                else if (key === 'copy-paths' && value !== undefined) {
+                    setCopyPaths(value);
+                    const paths = getCopyPaths();
+                    if (!paths) {
+                        console.log(chalk.green('Copy-paths cleared.'));
+                    }
+                    else {
+                        console.log(chalk.green(`Copy-paths set to: ${chalk.bold(paths)}`));
+                    }
+                }
+                else if (key === 'copy-paths') {
+                    console.error(chalk.red(`You must provide a comma-separated list of paths.`));
+                    process.exit(1);
+                }
                 else {
                     console.error(chalk.red(`Unknown configuration key to set: ${key}`));
                     process.exit(1);
@@ -42,41 +65,6 @@ export async function configHandler(action, key, value) {
             case 'path':
                 const configPath = getConfigPath();
                 console.log(chalk.blue(`Configuration file path: ${configPath}`));
-                break;
-            case 'copy-paths':
-                if (key === 'list') {
-                    const paths = getExtraCopyPaths();
-                    if (!paths.length) {
-                        console.log(chalk.blue('No extra copy paths configured.'));
-                    }
-                    else {
-                        console.log(chalk.blue('Extra copy paths:'));
-                        paths.forEach((extraPath) => console.log(` - ${extraPath}`));
-                    }
-                }
-                else if (key === 'add' && value) {
-                    const paths = addExtraCopyPath(value);
-                    console.log(chalk.green(`Added "${value}" to extra copy paths.`));
-                    console.log(chalk.blue(`Current paths: ${paths.join(', ')}`));
-                }
-                else if (key === 'remove' && value) {
-                    const before = getExtraCopyPaths();
-                    if (!before.includes(value)) {
-                        console.log(chalk.yellow(`Path "${value}" was not in the extra copy path list.`));
-                    }
-                    const paths = removeExtraCopyPath(value);
-                    console.log(chalk.green(`Removed "${value}" from extra copy paths.`));
-                    if (paths.length) {
-                        console.log(chalk.blue(`Current paths: ${paths.join(', ')}`));
-                    }
-                    else {
-                        console.log(chalk.blue('No extra copy paths configured.'));
-                    }
-                }
-                else {
-                    console.error(chalk.red(`Unknown copy-paths command: ${key}`));
-                    process.exit(1);
-                }
                 break;
             default:
                 console.error(chalk.red(`Unknown config action: ${action}`));

@@ -45,25 +45,26 @@ export function getConfigPath() {
 export function getExtraCopyPaths() {
     return config.get('extraCopyPaths');
 }
-export function addExtraCopyPath(extraPath) {
-    const trimmed = extraPath.trim();
-    if (!trimmed) {
-        return getExtraCopyPaths();
-    }
-    const current = new Set(getExtraCopyPaths());
-    current.add(trimmed);
-    const next = Array.from(current);
-    config.set('extraCopyPaths', next);
-    return next;
+// Get copy-paths as comma-separated string
+export function getCopyPaths() {
+    const paths = getExtraCopyPaths();
+    return paths.join(',');
 }
-export function removeExtraCopyPath(extraPath) {
-    const trimmed = extraPath.trim();
+// Set copy-paths from comma-separated string
+export function setCopyPaths(value) {
+    const trimmed = value.trim();
     if (!trimmed) {
-        return getExtraCopyPaths();
+        config.set('extraCopyPaths', []);
+        return;
     }
-    const current = getExtraCopyPaths().filter((path) => path !== trimmed);
-    config.set('extraCopyPaths', current);
-    return current;
+    // Split by comma and trim each path
+    const paths = trimmed
+        .split(',')
+        .map(p => p.trim())
+        .filter(p => p.length > 0);
+    // Remove duplicates
+    const uniquePaths = Array.from(new Set(paths));
+    config.set('extraCopyPaths', uniquePaths);
 }
 export function getDefaultPackageManager() {
     return config.get('defaultPackageManager');

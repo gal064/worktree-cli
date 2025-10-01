@@ -205,6 +205,15 @@ program
           .description("Set the default package manager for dependency installation.")
           .action((manager) => configHandler("set", "package-manager", manager))
       )
+      .addCommand(
+        new Command("copy-paths")
+          .argument(
+            "<paths>",
+            "Comma-separated list of paths to copy into new worktrees"
+          )
+          .description("Set the paths to copy into new worktrees (comma-separated).")
+          .action((paths) => configHandler("set", "copy-paths", paths))
+      )
   )
   .addCommand(
     new Command("get")
@@ -219,32 +228,16 @@ program
           .description("Get the currently configured default package manager.")
           .action(() => configHandler("get", "package-manager"))
       )
+      .addCommand(
+        new Command("copy-paths")
+          .description("Get the currently configured copy-paths (comma-separated).")
+          .action(() => configHandler("get", "copy-paths"))
+      )
   )
   .addCommand(
     new Command("path")
       .description("Show the path to the configuration file.")
       .action(() => configHandler("path"))
-  )
-  .addCommand(
-    new Command("copy-paths")
-      .description("Manage extra paths copied into new worktrees.")
-      .addCommand(
-        new Command("list")
-          .description("List configured extra copy paths.")
-          .action(() => configHandler("copy-paths", "list"))
-      )
-      .addCommand(
-        new Command("add")
-          .argument("<path>", "Path or glob to copy into new worktrees.")
-          .description("Add a path to the extra copy list.")
-          .action((path) => configHandler("copy-paths", "add", path))
-      )
-      .addCommand(
-        new Command("remove")
-          .argument("<path>", "Path or glob to remove from the copy list.")
-          .description("Remove a path from the extra copy list.")
-          .action((path) => configHandler("copy-paths", "remove", path))
-      )
   );
 
 program.parse(process.argv);

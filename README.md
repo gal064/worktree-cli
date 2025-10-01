@@ -104,10 +104,11 @@ wt config path
 Additional helpers:
 
 ```bash
-# Manage extra files or folders to copy alongside .env* files during wt new/copy
-wt config copy-paths add configs/local.json
-wt config copy-paths list
-wt config copy-paths remove configs/local.json
+# Set extra files or folders to copy alongside .env* files during wt new/copy
+wt config set copy-paths "configs/local.json,src/config.local.ts"
+
+# Get currently configured copy-paths
+wt config get copy-paths
 ```
 
 The default editor (VS Code) will be used when creating new or copied worktrees unless overridden with the `-e` flag.
