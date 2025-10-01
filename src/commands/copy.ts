@@ -85,7 +85,8 @@ export async function copyWorktreeHandler(
             console.log(chalk.blue(`Creating new branch "${targetBranch}" from current HEAD.`));
             await execa("git", ["worktree", "add", "-b", targetBranch, resolvedPath, "HEAD"]);
         } else {
-            console.log(chalk.green(`Using existing branch "${targetBranch}".`));
+            console.log(chalk.red(`⚠️  WARNING: Branch "${targetBranch}" already exists!`));
+            console.log(chalk.red(`   Checking out existing branch, then overwriting with your current working tree state.`));
             await execa("git", ["worktree", "add", resolvedPath, targetBranch]);
         }
 

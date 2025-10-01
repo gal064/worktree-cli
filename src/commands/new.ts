@@ -95,7 +95,8 @@ export async function newWorktreeHandler(
                 // Create a new branch and worktree in one command with -b flag
                 await execa("git", ["worktree", "add", "-b", branchName, resolvedPath]);
             } else {
-                console.log(chalk.green(`Using existing branch "${branchName}".`));
+                console.log(chalk.red(`⚠️  WARNING: Branch "${branchName}" already exists!`));
+                console.log(chalk.red(`   You are checking out the existing branch state, NOT creating from current HEAD.`));
                 await execa("git", ["worktree", "add", resolvedPath, branchName]);
             }
 
