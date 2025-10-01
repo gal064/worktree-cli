@@ -2,7 +2,7 @@ import { execa } from 'execa';
 import chalk from 'chalk';
 import { readdir, mkdir, copyFile, cp, stat, lstat, rm } from 'node:fs/promises';
 import { Dirent } from 'node:fs';
-import { join, dirname, relative, resolve, isAbsolute, sep } from 'node:path';
+import { join, dirname, relative, resolve, isAbsolute } from 'node:path';
 
 const SKIP_DIR_NAMES = new Set(['node_modules', '.venv', '.git']);
 
@@ -30,9 +30,8 @@ async function pathExists(targetPath: string): Promise<boolean> {
 interface CopySummary {
     envCopied: number;
     envSkipped: number;
-    extraCopied: string[];
-    extraSkipped: string[];
-    extraMissing: string[];
+    extraCopied: number;
+    extraSkipped: number;
 }
 
 export async function copyEnvFilesAndExtras(
@@ -43,10 +42,14 @@ export async function copyEnvFilesAndExtras(
     const summary: CopySummary = {
         envCopied: 0,
         envSkipped: 0,
-        extraCopied: [],
-        extraSkipped: [],
-        extraMissing: [],
+        extraCopied: 0,
+        extraSkipped: 0,
     };
+
+    // Prepare extra patterns (trim and deduplicate)
+    const extraPatterns = Array.from(new Set(extraPaths.map((p) => p.trim()))).filter(
+        (p) => p.length > 0
+    );
 
     const stack: string[] = [sourceRoot];
 
@@ -77,10 +80,11 @@ export async function copyEnvFilesAndExtras(
                 continue;
             }
 
-            if (entry.name.startsWith('.env')) {
-                const relativePath = relative(sourceRoot, entryPath);
-                const destinationPath = join(destinationRoot, relativePath);
+            const relativePath = relative(sourceRoot, entryPath);
+            const destinationPath = join(destinationRoot, relativePath);
 
+            // Check if this file matches .env* pattern
+            if (entry.name.startsWith('.env')) {
                 try {
                     await mkdir(dirname(destinationPath), { recursive: true });
                     if (await pathExists(destinationPath)) {
@@ -96,69 +100,28 @@ export async function copyEnvFilesAndExtras(
                         error
                     );
                 }
-            }
-        }
-    }
-
-    const uniqueExtraPaths = Array.from(new Set(extraPaths.map((extraPath) => extraPath.trim()))).filter(
-        (extraPath) => extraPath.length > 0
-    );
-
-    for (const configuredPath of uniqueExtraPaths) {
-        const absoluteSource = isAbsolute(configuredPath)
-            ? configuredPath
-            : resolve(sourceRoot, configuredPath);
-
-        const relativeToRoot = relative(sourceRoot, absoluteSource);
-        if (relativeToRoot.startsWith('..') || isAbsolute(relativeToRoot)) {
-            console.warn(
-                chalk.yellow(
-                    `Skipping extra copy path "${configuredPath}" because it is outside the repository root.`
-                )
-            );
-            continue;
-        }
-
-        const segments = relativeToRoot.split(sep).filter((segment) => segment.length > 0);
-        const includesSkippedSegment = segments.some(
-            (segment) => SKIP_DIR_NAMES.has(segment) || segment.startsWith('.env')
-        );
-
-        if (includesSkippedSegment) {
-            console.warn(
-                chalk.yellow(
-                    `Skipping extra copy path "${configuredPath}" because it contains a restricted directory (node_modules/.venv/.env*).`
-                )
-            );
-            continue;
-        }
-
-        if (!(await pathExists(absoluteSource))) {
-            console.warn(chalk.yellow(`Configured copy path missing: ${configuredPath}`));
-            summary.extraMissing.push(configuredPath);
-            continue;
-        }
-
-        const destinationPath = join(destinationRoot, relativeToRoot);
-        try {
-            const sourceStat = await stat(absoluteSource);
-            await mkdir(sourceStat.isDirectory() ? destinationPath : dirname(destinationPath), {
-                recursive: true,
-            });
-
-            await cp(absoluteSource, destinationPath, {
-                recursive: true,
-                force: false,
-                errorOnExist: false,
-                verbatimSymlinks: false,
-            });
-            summary.extraCopied.push(configuredPath);
-        } catch (error: any) {
-            if (error?.code === 'EEXIST') {
-                summary.extraSkipped.push(configuredPath);
                 continue;
             }
-            console.warn(chalk.yellow(`Failed to copy configured path "${configuredPath}".`), error);
+
+            // Check if this file matches any extra patterns
+            const matchesPattern = extraPatterns.some((pattern) => entry.name === pattern);
+            if (matchesPattern) {
+                try {
+                    await mkdir(dirname(destinationPath), { recursive: true });
+                    if (await pathExists(destinationPath)) {
+                        summary.extraSkipped += 1;
+                        continue;
+                    }
+
+                    await copyFile(entryPath, destinationPath);
+                    summary.extraCopied += 1;
+                } catch (error) {
+                    console.warn(
+                        chalk.yellow(`Failed to copy ${relativePath} into new worktree.`),
+                        error
+                    );
+                }
+            }
         }
     }
 
@@ -173,26 +136,11 @@ export async function copyEnvFilesAndExtras(
         );
     }
 
-    if (summary.extraCopied.length) {
-        console.log(
-            chalk.green(
-                `Copied extra paths: ${summary.extraCopied.join(', ')}`
-            )
-        );
+    if (summary.extraCopied > 0) {
+        console.log(chalk.green(`Copied ${summary.extraCopied} extra file(s) matching configured patterns.`));
     }
-    if (summary.extraSkipped.length) {
-        console.log(
-            chalk.yellow(
-                `Skipped existing extra paths: ${summary.extraSkipped.join(', ')}`
-            )
-        );
-    }
-    if (summary.extraMissing.length) {
-        console.log(
-            chalk.yellow(
-                `Missing configured paths: ${summary.extraMissing.join(', ')}`
-            )
-        );
+    if (summary.extraSkipped > 0) {
+        console.log(chalk.yellow(`Skipped ${summary.extraSkipped} extra file(s) that already existed.`));
     }
 
     return summary;

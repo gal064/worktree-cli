@@ -32,7 +32,11 @@ wt new feature/nodeps -i skip  # Skip dependency installation
 wt new feature/autodetect -i   # Force auto-detect (override config)
 ```
 
-When a worktree is created, the CLI copies every `.env*` file (plus any paths configured via `wt config copy-paths`) into the new directory. By default, it auto-detects lockfiles (`uv.lock`, `package-lock.json`, `yarn.lock`) to install dependencies. You can configure the default behavior with `wt config set package-manager <manager>`, or use `--install` to override on a per-command basis. Use `--install skip` to disable installation entirely.
+When a worktree is created, the CLI automatically copies every `.env*` file found anywhere in your repository into the new directory. You can also configure additional filename patterns via `wt config set copy-paths` - these patterns will be searched for throughout the entire repository tree (similar to how `.env*` files are found).
+
+**Note:** `copy-paths` uses exact filename matching (e.g., `"config.local.json"` will find all files named exactly `config.local.json` anywhere in the repo). It does **not** support glob patterns like `*.json` or wildcards.
+
+By default, it auto-detects lockfiles (`uv.lock`, `package-lock.json`, `yarn.lock`) to install dependencies. You can configure the default behavior with `wt config set package-manager <manager>`, or use `--install` to override on a per-command basis. Use `--install skip` to disable installation entirely.
 
 ### Create a new worktree from Pull Request Number
 
@@ -101,15 +105,23 @@ wt config get editor
 wt config path
 ```
 
-Additional helpers:
+### Configure Copy Paths
+
+Configure additional filename patterns to copy into new worktrees (in addition to `.env*` files which are always copied):
 
 ```bash
-# Set extra files or folders to copy alongside .env* files during wt new/copy
-wt config set copy-paths "configs/local.json,src/config.local.ts"
+# Set extra filename patterns to search for throughout the repo
+wt config set copy-paths "config.local.json,.secrets.yaml"
 
 # Get currently configured copy-paths
 wt config get copy-paths
 ```
+
+**How it works:**
+- `.env*` files are **always** copied automatically (cannot be disabled)
+- `copy-paths` adds exact filename patterns to search for recursively throughout the entire repository
+- Example: `"config.local.json"` will find and copy all files named exactly `config.local.json` from any directory in your repo
+- Does **not** support glob patterns or wildcards - only exact filename matching
 
 The default editor (VS Code) will be used when creating new or copied worktrees unless overridden with the `-e` flag.
 

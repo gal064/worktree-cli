@@ -209,9 +209,9 @@ program
         new Command("copy-paths")
           .argument(
             "<paths>",
-            "Comma-separated list of paths to copy into new worktrees"
+            "Comma-separated list of exact filenames to search for and copy (e.g., \"config.local.json,.secrets.yaml\")"
           )
-          .description("Set the paths to copy into new worktrees (comma-separated).")
+          .description("Set exact filenames to search for recursively and copy into new worktrees. .env* files are always copied.")
           .action((paths) => configHandler("set", "copy-paths", paths))
       )
   )
@@ -230,7 +230,7 @@ program
       )
       .addCommand(
         new Command("copy-paths")
-          .description("Get the currently configured copy-paths (comma-separated).")
+          .description("Get the currently configured exact filenames to copy (comma-separated).")
           .action(() => configHandler("get", "copy-paths"))
       )
   )
