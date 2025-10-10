@@ -358,32 +358,43 @@ export async function replicateWorkingTreeState(
     }
 
     const statusEntries = parseNullSeparated(statusStdout);
-    for (const entry of statusEntries) {
-        const parts = entry.split('\t');
-        if (parts.length === 0) continue;
+    // With -z flag, git outputs: status\0filename\0status\0filename\0
+    // After splitting by \0, we get pairs: [status, filename, status, filename, ...]
+    for (let i = 0; i < statusEntries.length; i++) {
+        const status = statusEntries[i];
+        if (!status) continue;
 
-        const status = parts[0];
         const code = status[0];
 
-        if (code === 'D' && parts[1]) {
-            deletions.add(parts[1]);
+        if (code === 'D') {
+            const filename = statusEntries[i + 1];
+            if (filename) {
+                deletions.add(filename);
+            }
+            i++; // Skip the filename we just processed
             continue;
         }
 
-        if (code === 'R' && parts.length >= 3) {
-            const [, fromPath, toPath] = parts;
+        if (code === 'R') {
+            // For renames: R\0oldname\0newname\0
+            const fromPath = statusEntries[i + 1];
+            const toPath = statusEntries[i + 2];
             if (fromPath) {
                 deletions.add(fromPath);
             }
             if (toPath) {
                 filesToCopy.add(toPath);
             }
+            i += 2; // Skip both paths we just processed
             continue;
         }
 
-        if (parts[1]) {
-            filesToCopy.add(parts[1]);
+        // For other status codes (M, A, etc.)
+        const filename = statusEntries[i + 1];
+        if (filename) {
+            filesToCopy.add(filename);
         }
+        i++; // Skip the filename we just processed
     }
 
     deletions.forEach((path) => filesToCopy.delete(path));
